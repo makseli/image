@@ -2,83 +2,85 @@
 
 namespace Intervention\Image;
 
+use Exception;
 use Closure;
+use Illuminate\Filesystem\Filesystem;
 
 class Image
 {
     /**
      * The image resource identifier of current image
-     *
+     * 
      * @var resource
      */
     public $resource;
 
     /**
      * Type of current image
-     *
+     * 
      * @var string
      */
     public $type;
 
     /**
      * Width of current image
-     *
+     * 
      * @var integer
      */
     public $width;
 
     /**
      * Height of current image
-     *
+     * 
      * @var integer
      */
     public $height;
 
     /**
      * Directory path of current image
-     *
+     * 
      * @var string
      */
     public $dirname;
 
     /**
      * Trailing name component of current image filename
-     *
+     * 
      * @var string
      */
     public $basename;
 
     /**
      * File extension of current image filename
-     *
+     * 
      * @var string
      */
     public $extension;
 
     /**
      * Combined filename (basename and extension)
-     *
+     * 
      * @var string
      */
     public $filename;
 
     /**
-     * MIME type of image
-     *
-     * @var string
+     * Instance of Illuminate\Filesystem\Filesystem
+     * 
+     * @var Filesystem
      */
-    public $mime;
+    protected $filesystem;
 
     /**
      * Attributes of the original created image
-     *
+     * 
      * @var Array
      */
     protected $original;
 
     /**
      * Identifier for cached images
-     *
+     * 
      * @var boolean
      */
     public $cached = false;
@@ -86,61 +88,51 @@ class Image
     /**
      * Create a new instance of Image class
      *
-     * @param string  $source
-     * @param integer $width
-     * @param integer $height
-     * @param mixed   $bgcolor
+     * @param string $path
      */
-    public function __construct($source = null, $width = null, $height = null, $bgcolor = null)
+    public function __construct($path = null, $width = null, $height = null)
     {
-        // set image properties
-        if (! is_null($source)) {
+        // create filesystem
+        $this->filesystem = new Filesystem;
+        
+        // set image properties 
+        if ( ! is_null($path)) {
 
-            if ($this->isImageResource($source)) {
-
-                // image properties come from gd image resource
-                $this->initFromResource($source);
-
-            } elseif ($this->isBinary($source)) {
-
-                // image properties come from binary image string
-                $this->initFromString($source);
-
-            } else {
-
-                // image properties come from image file
-                $this->initFromPath($source);
-            }
+            $this->setPropertiesFromPath($path);
 
         } else {
 
-            // new empty resource
-            $this->initEmpty($width, $height, $bgcolor);
+            $this->setPropertiesEmpty($width, $height);
         }
     }
 
     /**
      * Open a new image resource from image file
      *
-     * @param  mixed $source
+     * @param  string $path
      * @return Image
      */
-    public static function make($source)
+    public static function make($path)
     {
-        return new Image($source);
+        $image = new Image;
+        $image->setPropertiesFromPath($path);
+
+        return $image;
     }
 
     /**
      * Create a new empty image resource
      *
-     * @param  int   $width
-     * @param  int   $height
-     * @param  mixed $bgcolor
+     * @param  int $width
+     * @param  int $height
      * @return Image
      */
-    public static function canvas($width, $height, $bgcolor = null)
+    public static function canvas($width, $height)
     {
-        return new Image(null, $width, $height, $bgcolor);
+        $image = new Image;
+        $image->setPropertiesEmpty($width, $height);
+
+        return $image;
     }
 
     /**
@@ -151,26 +143,23 @@ class Image
      */
     public static function raw($string)
     {
-        return new Image($string);
+        $image = new Image;
+        $image->setPropertiesFromString($string);
+
+        return $image;
     }
 
     /**
      * Create new cached image and run callback
      * (requires additional package intervention/imagecache)
      *
-     * @param Closure $callback
-     * @param integer $lifetime
-     * @param boolean $returnObj
-     *
+     * @param  Closure $callback
      * @return Image
      */
     public static function cache(Closure $callback = null, $lifetime = null, $returnObj = false)
     {
-        if (! class_exists('\Intervention\Image\ImageCache')) {
-            throw new Exception\ImageCacheNotFoundException(
-                'Please install package intervention/imagecache before
-                running this function.'
-            );
+        if ( ! class_exists('\Intervention\Image\ImageCache')) {
+            throw new Exception('Please install package intervention/imagecache before running this function.');
         }
 
         // Create image and run callback
@@ -182,59 +171,70 @@ class Image
 
     /**
      * Set properties for image resource from image file
-     *
-     * @param  string $path
+     * 
+     * @param string $path
      * @return void
      */
-    private function initFromPath($path)
+    private function setPropertiesFromPath($path)
     {
-        if (! file_exists($path)) {
-            throw new Exception\ImageNotFoundException(
-                "Image file ({$path}) not found"
-            );
+        if ( ! $this->filesystem->exists($path)) {
+            throw new Exception("Image file ({$path}) not found");
         }
 
         // set file info
-        $this->setFileInfoFromPath($path);
+        $info = pathinfo($path);
+        $this->dirname = $info['dirname'];
+        $this->basename = $info['basename'];
+        $this->extension = $info['extension'];
+        $this->filename = $info['filename'];
 
         // set image info
-        $this->setImageInfoFromPath($path);
+        list($this->width, $this->height, $this->type) = @getimagesize($path);
+
+        // set resource
+        switch ($this->type) {
+            case IMG_PNG:
+            case 3:
+            $this->resource = @imagecreatefrompng($path);
+            break;
+
+            case IMG_JPG:
+            $this->resource = @imagecreatefromjpeg($path);
+            break;
+
+            case IMG_GIF:
+            $this->resource = @imagecreatefromgif($path);
+            break;
+
+            default:
+            throw new Exception("Wrong image type ({$this->type}) only use JPG, PNG or GIF images.");
+            break;
+        }
     }
 
     /**
      * Set properties for image resource from string
      *
-     * @param  string $string
+     * @param string $string
      * @return void
      */
-    private function initFromString($string)
+    private function setPropertiesFromString($string)
     {
-        $this->setImageInfoFromString($string);
-    }
-
-    /**
-     * Set image properties from GD image resource
-     *
-     * @param resource $resource
-     */
-    private function initFromResource($resource)
-    {
-        if (! $this->isImageResource($resource)) {
-            throw new Exception\InvalidImageResourceException;
-        }
-
-        $this->setImageInfoFromResource($resource);
+        $this->resource = imagecreatefromstring($string);
+        $this->width = imagesx($this->resource);
+        $this->height = imagesy($this->resource);
+        $this->original['width'] = $this->width;
+        $this->original['height'] = $this->height;
     }
 
     /**
      * Set properties for empty image resource
-     *
-     * @param  int   $width
-     * @param  int   $height
-     * @param  mixed $bgcolor
+     * 
+     * @param int $width
+     * @param int $height
      * @return void
      */
-    private function initEmpty($width, $height, $bgcolor = null)
+    private function setPropertiesEmpty($width, $height)
     {
         $this->width = is_numeric($width) ? intval($width) : 1;
         $this->height = is_numeric($height) ? intval($height) : 1;
@@ -243,18 +243,11 @@ class Image
         $this->original['height'] = $this->height;
 
         // create empty image
-        $this->resource = imagecreatetruecolor($this->width, $this->height);
+        $this->resource = @imagecreatetruecolor($this->width, $this->height);
 
-        // set background color
-        if (is_null($bgcolor)) {
-            // fill with transparent background instead of black
-            $bgcolor = imagecolorallocatealpha($this->resource, 0, 0, 0, 127);
-        } else {
-            $bgcolor = $this->parseColor($bgcolor);
-        }
-
-        imagefill($this->resource, 0, 0, $bgcolor);
-        $this->original['bgcolor'] = $bgcolor;
+        // fill with transparent background instead of black
+        $transparent = imagecolorallocatealpha($this->resource, 0, 0, 0, 127);
+        imagefill($this->resource, 0, 0, $transparent);
     }
 
     /**
@@ -270,28 +263,13 @@ class Image
      * @param  integer $src_h
      * @return Image
      */
-    private function modify($dst_x, $dst_y, $src_x, $src_y, $dst_w, $dst_h, $src_w, $src_h)
+    private function modify($dst_x , $dst_y , $src_x , $src_y , $dst_w , $dst_h , $src_w , $src_h)
     {
         // create new image
-        $image = imagecreatetruecolor($dst_w, $dst_h);
-
-        // preserve transparency
-        imagealphablending($image, false);
-        imagesavealpha($image, true);
+        $image = @imagecreatetruecolor($dst_w, $dst_h);
 
         // copy content from resource
-        imagecopyresampled(
-            $image,
-            $this->resource,
-            $dst_x,
-            $dst_y,
-            $src_x,
-            $src_y,
-            $dst_w,
-            $dst_h,
-            $src_w,
-            $src_h
-        );
+        @imagecopyresampled($image, $this->resource, $dst_x , $dst_y , $src_x , $src_y , $dst_w , $dst_h , $src_w , $src_h);
 
         // set new content as recource
         $this->resource = $image;
@@ -311,7 +289,7 @@ class Image
      */
     public function open($path)
     {
-        $this->initFromPath($path);
+        $this->setPropertiesFromPath($path);
 
         return $this;
     }
@@ -336,7 +314,6 @@ class Image
         // catch legacy call
         if (is_array($width)) {
             $dimensions = $width;
-
             return $this->legacyResize($dimensions);
         }
 
@@ -351,7 +328,7 @@ class Image
 
             // If both width and hight have been passed along, the width and
             // height parameters are maximum values.
-            if (! is_null($width) && ! is_null($height)) {
+            if ( ! is_null($width) && ! is_null($height)) {
 
                 // First, calculate the height.
                 $height = intval($width / $this->width * $this->height);
@@ -364,9 +341,8 @@ class Image
                     $width = intval($height / $this->height * $this->width);
                 }
 
-            } elseif ($ratio && (! is_null($width) or ! is_null($height))) {
+            } elseif ($ratio && ( ! is_null($width) OR ! is_null($height))) { // If only one of width or height has been provided.
 
-                // If only one of width or height has been provided.
                 $width = is_null($width) ? intval($height / $this->height * $this->width) : $width;
                 $height = is_null($height) ? intval($width / $this->width * $this->height) : $height;
             }
@@ -374,10 +350,10 @@ class Image
 
         // If the image can't be upsized, check if the given width and/or
         // height are too large.
-        if (! $upsize) {
+        if ( ! $upsize) {
             // If the given width is larger then the image width,
             // then don't resize it.
-            if (! is_null($width) && $width > $this->width) {
+            if ( ! is_null($width) && $width > $this->width) {
                 $width = $this->width;
 
                 // If ratio needs to be kept, height is recalculated.
@@ -388,7 +364,7 @@ class Image
 
             // If the given height is larger then the image height,
             // then don't resize it.
-            if (! is_null($height) && $height > $this->height) {
+            if ( ! is_null($height) && $height > $this->height) {
                 $height = $this->height;
 
                 // If ratio needs to be kept, width is recalculated.
@@ -402,14 +378,14 @@ class Image
         // throw an exception.
         if (is_null($width) && is_null($height)) {
 
-            throw new Exception\DimensionOutOfBoundsException('width or height needs to be defined');
+            throw new Exception('width or height needs to be defined');
 
         } elseif (is_null($width)) { // If only the width hasn't been set, keep the current width.
-
+            
             $width = $this->width;
 
         } elseif (is_null($height)) { // If only the height hasn't been set, keep the current height.
-
+            
             $height = $this->height;
 
         }
@@ -421,47 +397,24 @@ class Image
     /**
      * Legacy method to support old resizing calls
      *
-     * @param  array $dimensions
+     * @param  array  $dimensions
      * @return Image
      */
     public function legacyResize($dimensions = array())
     {
         $width = array_key_exists('width', $dimensions) ? intval($dimensions['width']) : null;
         $height = array_key_exists('height', $dimensions) ? intval($dimensions['height']) : null;
-
         return $this->resize($width, $height, true);
     }
 
     /**
-     * Resize image to new width, constraining proportions
-     *
-     * @param  integer $width
-     * @return Image
-     */
-    public function widen($width)
-    {
-        return $this->resize($width, null, true);
-    }
-
-    /**
-     * Resize image to new height, constraining proportions
-     *
-     * @param  integer $height
-     * @return Image
-     */
-    public function heighten($height)
-    {
-        return $this->resize(null, $height, true);
-    }
-
-    /**
      * Resize image canvas
-     *
-     * @param  int     $width
-     * @param  int     $height
+     * 
+     * @param  int  $width
+     * @param  int  $height
      * @param  string  $anchor
      * @param  boolean $relative
-     * @param  mixed   $bgcolor
+     * @param  mixed  $bgcolor
      * @return Image
      */
     public function resizeCanvas($width, $height, $anchor = null, $relative = false, $bgcolor = null)
@@ -474,7 +427,7 @@ class Image
         if ($relative) {
             $width = $this->width + $width;
             $height = $this->height + $height;
-        }
+        } 
 
         // check for negative width
         if ($width <= 0) {
@@ -487,7 +440,7 @@ class Image
         }
 
         // create new canvas
-        $image = imagecreatetruecolor($width, $height);
+        $image = @imagecreatetruecolor($width, $height);
 
         if ($width > $this->width || $height > $this->height) {
             $bgcolor = is_null($bgcolor) ? '000000' : $bgcolor;
@@ -509,7 +462,6 @@ class Image
         // define anchor
         switch ($anchor) {
             case 'top-left':
-            case 'left-top':
                 $src_x = 0;
                 $src_y = 0;
                 break;
@@ -517,14 +469,11 @@ class Image
             case 'top':
             case 'top-center':
             case 'top-middle':
-            case 'center-top':
-            case 'middle-top':
                 $src_x = ($width < $this->width) ? intval(($this->width - $width) / 2) : 0;
                 $src_y = 0;
                 break;
 
             case 'top-right':
-            case 'right-top':
                 $src_x = ($width < $this->width) ? intval($this->width - $width) : 0;
                 $src_y = 0;
                 break;
@@ -532,8 +481,6 @@ class Image
             case 'left':
             case 'left-center':
             case 'left-middle':
-            case 'center-left':
-            case 'middle-left':
                 $src_x = 0;
                 $src_y = ($height < $this->height) ? intval(($this->height - $height) / 2) : 0;
                 break;
@@ -541,14 +488,11 @@ class Image
             case 'right':
             case 'right-center':
             case 'right-middle':
-            case 'center-right':
-            case 'middle-right':
                 $src_x = ($width < $this->width) ? intval($this->width - $width) : 0;
                 $src_y = ($height < $this->height) ? intval(($this->height - $height) / 2) : 0;
                 break;
 
             case 'bottom-left':
-            case 'left-bottom':
                 $src_x = 0;
                 $src_y = ($height < $this->height) ? intval($this->height - $height) : 0;
                 break;
@@ -556,14 +500,11 @@ class Image
             case 'bottom':
             case 'bottom-center':
             case 'bottom-middle':
-            case 'center-bottom':
-            case 'middle-bottom':
                 $src_x = ($width < $this->width) ? intval(($this->width - $width) / 2) : 0;
                 $src_y = ($height < $this->height) ? intval($this->height - $height) : 0;
                 break;
-
+            
             case 'bottom-right':
-            case 'right-bottom':
                 $src_x = ($width < $this->width) ? intval($this->width - $width) : 0;
                 $src_y = ($height < $this->height) ? intval($this->height - $height) : 0;
                 break;
@@ -583,7 +524,7 @@ class Image
         $dst_y = ($height <= $this->height) ? 0 : intval(($height - $this->height) / 2);
 
         // copy content from resource
-        imagecopy($image, $this->resource, $dst_x, $dst_y, $src_x, $src_y, $src_w, $src_h);
+        @imagecopy($image, $this->resource, $dst_x , $dst_y , $src_x , $src_y , $src_w , $src_h);
 
         // set new content as recource
         $this->resource = $image;
@@ -598,10 +539,10 @@ class Image
     /**
      * Crop the current image
      *
-     * @param integer $width
-     * @param integer $height
-     * @param integer $pos_x
-     * @param integer $pos_y
+     * @param  integer $width
+     * @param  integer $height
+     * @param  integer $pos_x
+     * @param  integer $pos_y
      *
      * @return Image
      */
@@ -619,20 +560,18 @@ class Image
         }
 
         if (is_null($width) || is_null($height)) {
-            throw new Exception\DimensionOutOfBoundsException(
-                'width and height of cutout needs to be defined'
-            );
+            throw new Exception('width and height of cutout needs to be defined');
         }
 
-        return $this->modify(0, 0, $pos_x, $pos_y, $width, $height, $width, $height);
+        return $this->modify(0, 0, $pos_x , $pos_y, $width, $height, $width, $height);
     }
 
     /**
      * Cut out a detail of the image in given ratio and resize to output size
      *
-     * @param integer $width
-     * @param integer $height
-     *
+     * @param  int  $width
+     * @param  int  $height
+     *                     
      * @return Image
      */
     public function grab($width = null, $height = null)
@@ -640,29 +579,26 @@ class Image
         // catch legacy call
         if (is_array($width)) {
             $dimensions = $width;
-
             return $this->legacyGrab($dimensions);
         }
 
         $width = is_numeric($width) ? intval($width) : null;
         $height = is_numeric($height) ? intval($height) : null;
 
-        if (! is_null($width) or ! is_null($height)) {
+        if ( ! is_null($width) OR ! is_null($height)) {
             // if width or height are not set, define values automatically
             $width = is_null($width) ? $height : $width;
             $height = is_null($height) ? $width : $height;
         } else {
             // width or height not defined (resume with original values)
-            throw new Exception\DimensionOutOfBoundsException(
-                'width or height needs to be defined'
-            );
+            throw new Exception('width or height needs to be defined');
         }
 
         // ausschnitt berechnen
         $grab_width = $this->width;
         $ratio = $grab_width / $width;
 
-        if ($height * $ratio <= $this->height) {
+        if($height * $ratio <= $this->height) {
             $grab_height = round($height * $ratio);
             $src_x = 0;
             $src_y = round(($this->height - $grab_height) / 2);
@@ -680,7 +616,7 @@ class Image
     /**
      * Legacy Method to support older grab calls
      *
-     * @param  array $dimensions
+     * @param  array  $dimensions
      * @return Image
      */
     public function legacyGrab($dimensions = array())
@@ -712,7 +648,7 @@ class Image
                 $y = $height - 1;
                 $height = $height * (-1);
                 break;
-
+            
             default:
                 $x = $width - 1;
                 $width = $width * (-1);
@@ -725,168 +661,15 @@ class Image
     /**
      * Insert another image on top of the current image
      *
-     * @param  mixed   $source
+     * @param  string  $file
      * @param  integer $pos_x
      * @param  integer $pos_y
-     * @param  string  $anchor
      * @return Image
      */
-    public function insert($source, $pos_x = 0, $pos_y = 0, $anchor = null)
+    public function insert($file, $pos_x = 0, $pos_y = 0)
     {
-        $obj = is_a($source, 'Intervention\Image\Image') ? $source : (new Image($source));
-
-        // define anchor
-        switch ($anchor) {
-
-            case 'top':
-            case 'top-center':
-            case 'top-middle':
-            case 'center-top':
-            case 'middle-top':
-                $pos_x = intval((($this->width - $obj->width) / 2) + $pos_x);
-                $pos_y = $pos_y;
-                break;
-
-            case 'top-right':
-            case 'right-top':
-                $pos_x = intval($this->width - $obj->width - $pos_x);
-                $pos_y = $pos_y;
-                break;
-
-            case 'left':
-            case 'left-center':
-            case 'left-middle':
-            case 'center-left':
-            case 'middle-left':
-                $pos_x = $pos_x;
-                $pos_y = intval((($this->height - $obj->height) / 2) + $pos_y);
-                break;
-
-            case 'right':
-            case 'right-center':
-            case 'right-middle':
-            case 'center-right':
-            case 'middle-right':
-                $pos_x = intval($this->width - $obj->width - $pos_x);
-                $pos_y = intval((($this->height - $obj->height) / 2) + $pos_y);
-                break;
-
-            case 'bottom-left':
-            case 'left-bottom':
-                $pos_x = $pos_x;
-                $pos_y = intval($this->height - $obj->height - $pos_y);
-                break;
-
-            case 'bottom':
-            case 'bottom-center':
-            case 'bottom-middle':
-            case 'center-bottom':
-            case 'middle-bottom':
-                $pos_x = intval((($this->width - $obj->width) / 2) + $pos_x);
-                $pos_y = intval($this->height - $obj->height - $pos_y);
-                break;
-
-            case 'bottom-right':
-            case 'right-bottom':
-                $pos_x = intval($this->width - $obj->width - $pos_x);
-                $pos_y = intval($this->height - $obj->height - $pos_y);
-                break;
-
-            case 'center':
-            case 'middle':
-            case 'center-center':
-            case 'middle-middle':
-                $pos_x = intval((($this->width - $obj->width) / 2) + $pos_x);
-                $pos_y = intval((($this->height - $obj->height) / 2) + $pos_y);
-                break;
-
-            default:
-            case 'top-left':
-            case 'left-top':
-                $pos_x = intval($pos_x);
-                $pos_y = intval($pos_y);
-                break;
-        }
-
+        $obj = is_a($file, 'Intervention\Image\Image') ? $file : (new Image($file));
         imagecopy($this->resource, $obj->resource, $pos_x, $pos_y, 0, 0, $obj->width, $obj->height);
-
-        return $this;
-    }
-
-    /**
-     * Set opacity of current image
-     *
-     * @param  integer $transparency
-     * @return Image
-     */
-    public function opacity($transparency)
-    {
-        if (is_numeric($transparency) && $transparency >= 0 && $transparency <= 100) {
-            $transparency = intval($transparency) / 100;
-        } else {
-            throw new Exception\OpacityOutOfBoundsException('Opacity must be between 0 and 100');
-        }
-
-        // --------------------------------------------------------------------
-        // http://stackoverflow.com/questions/2396415/what-does-new-self-mean-in-php
-        // --------------------------------------------------------------------
-        // create alpha mask
-        $alpha = new self(null, $this->width, $this->height);
-        $alpha->fill(sprintf('rgba(0, 0, 0, %.1f)', $transparency));
-
-        // apply alpha mask
-        $this->mask($alpha, true);
-
-        return $this;
-    }
-
-    /**
-     * Apply given image as alpha mask on current image
-     *
-     * @param  mixed   $source
-     * @param  boolean $mask_with_alpha
-     * @return Image
-     */
-    public function mask($source, $mask_with_alpha = false)
-    {
-        // create new empty image
-        $maskedImage = new Image(null, $this->width, $this->height);
-
-        // create mask
-        $mask = is_a($source, 'Intervention\Image\Image') ? $source : (new Image($source));
-
-        // resize mask to size of current image (if necessary)
-        if ($mask->width != $this->width || $mask->height != $this->height) {
-            $mask->resize($this->width, $this->height);
-        }
-
-        // redraw old image pixel by pixel considering alpha map
-        for ($x=0; $x < $this->width; $x++) {
-            for ($y=0; $y < $this->height; $y++) {
-
-                $color = $this->pickColor($x, $y, 'array');
-                $alpha = $mask->pickColor($x, $y, 'array');
-
-                if ($mask_with_alpha) {
-                    $alpha = $alpha['a']; // use alpha channel as mask
-                } else {
-                    $alpha = floatval(round($alpha['r'] / 255, 2)); // use red channel as mask
-                }
-
-                // preserve alpha of original image...
-                if ($color['a'] < $alpha) {
-                    $alpha = $color['a'];
-                }
-
-                $pixelColor = array($color['r'], $color['g'], $color['b'], $alpha);
-                $maskedImage->pixel($pixelColor, $x, $y);
-            }
-        }
-
-        // apply masked image to current instance
-        $this->resource = $maskedImage->resource;
-        $this->width = $maskedImage->width;
-        $this->height = $maskedImage->height;
 
         return $this;
     }
@@ -894,15 +677,15 @@ class Image
     /**
      * Rotate image with given angle
      *
-     * @param  float  $angle
-     * @param  string $color
-     * @param  int    $ignore_transparent
+     * @param  float    $angle
+     * @param  string   $color
+     * @param  int      $ignore_transparent
      * @return Image
      */
-    public function rotate($angle = 0, $bgcolor = '#000000', $ignore_transparent = 0)
+    public function rotate($angle = 0, $color = '#000000', $ignore_transparent = 0)
     {
         // rotate image
-        $this->resource = imagerotate($this->resource, $angle, $this->parseColor($bgcolor), $ignore_transparent);
+        $this->resource = imagerotate($this->resource, $angle, $this->parseColor($color), $ignore_transparent);
 
         // re-read width/height
         $this->width = imagesx($this->resource);
@@ -912,47 +695,16 @@ class Image
     }
 
     /**
-     * Fill image with given color or image source at position x,y
+     * Fill image with given hexadecimal color at position x,y
      *
-     * @param  mixed   $source
+     * @param  string  $color
      * @param  integer $pos_x
      * @param  integer $pos_y
      * @return Image
      */
-    public function fill($source, $pos_x = 0, $pos_y = 0)
+    public function fill($color, $pos_x = 0, $pos_y = 0)
     {
-        if (is_a($source, 'Intervention\Image\Image')) {
-
-            // fill with image
-            imagesettile($this->resource, $source->resource);
-            $source = IMG_COLOR_TILED;
-
-        } elseif ($this->isImageResource($source)) {
-
-            // fill with image resource
-            imagesettile($this->resource, $source);
-            $source = IMG_COLOR_TILED;
-
-        } elseif (is_string($source) && $this->isBinary($source)) {
-
-            // fill with image from binary string
-            $img = new self($source);
-            imagesettile($this->resource, $img->resource);
-            $source = IMG_COLOR_TILED;
-
-        } elseif (is_string($source) && file_exists(realpath($source))) {
-
-            $img = new self($source);
-            imagesettile($this->resource, $img->resource);
-            $source = IMG_COLOR_TILED;
-
-        } else {
-
-            // fill with color
-            $source = $this->parseColor($source);
-        }
-
-        imagefill($this->resource, $pos_x, $pos_y, $source);
+        imagefill($this->resource, $pos_x, $pos_y, $this->parseColor($color));
 
         return $this;
     }
@@ -1012,16 +764,16 @@ class Image
      * Draw an ellipse centered at given coordinates.
      *
      * @param  string  $color
-     * @param  integer $pos_x
-     * @param  integer $pos_y
+     * @param  integer $x
+     * @param  integer $y
      * @param  integer $width
      * @param  integer $height
      * @return Image
      */
-    public function ellipse($color, $pos_x = 0, $pos_y = 0, $width = 10, $height = 10, $filled = true)
+    public function ellipse($color, $x = 0, $y = 0, $width = 10, $height = 10, $filled = true)
     {
         $callback = $filled ? 'imagefilledellipse' : 'imageellipse';
-        call_user_func($callback, $this->resource, $pos_x, $pos_y, $width, $height, $this->parseColor($color));
+        call_user_func($callback, $this->resource, $x, $y, $width, $height, $this->parseColor($color));
 
         return $this;
     }
@@ -1038,7 +790,7 @@ class Image
      */
     public function circle($color, $x = 0, $y = 0, $radius = 10, $filled = true)
     {
-        return $this->ellipse($color, $x, $y, $radius * 2, $radius * 2, $filled);
+        return $this->ellipse($color, $x, $y, $radius, $radius, $filled);
     }
 
     /**
@@ -1071,19 +823,19 @@ class Image
     /**
      * Changes the brightness of the current image
      *
-     * @param int $level [description]
-     *
+     * @param  int $level [description]
      * @return Image
      */
     public function brightness($level)
     {
-        if ($level < -100 || $level > 100) {
-            throw new Exception\BrightnessOutOfBoundsException(
-                'Brightness level must be between -100 and +100'
-            );
+        // normalize level
+        if ($level >= -100 && $level <= 100) {
+            $level = $level * 2.55;
+        } else {
+            throw new Exception('Brightness level must be between -100 and +100');
         }
 
-        imagefilter($this->resource, IMG_FILTER_BRIGHTNESS, ($level * 2.55));
+        imagefilter($this->resource, IMG_FILTER_BRIGHTNESS, $level);
 
         return $this;
     }
@@ -1091,19 +843,19 @@ class Image
     /**
      * Changes the contrast of the current image
      *
-     * @param int $level
-     *
+     * @param  int $level
      * @return Image
      */
     public function contrast($level)
     {
-        if ($level < -100 || $level > 100) {
-            throw new Exception\ContrastOutOfBoundsException(
-                'Contrast level must be between -100 and +100'
-            );
+        // normalize level
+        if ($level >= -100 && $level <= 100) {
+            $level = $level * (-1);
+        } else {
+            throw new Exception('Contrast level must be between -100 and +100');
         }
 
-        imagefilter($this->resource, IMG_FILTER_CONTRAST, ($level * -1));
+        imagefilter($this->resource, IMG_FILTER_CONTRAST, $level);
 
         return $this;
     }
@@ -1148,62 +900,12 @@ class Image
 
     /**
      * Invert colors of current image
-     *
+     * 
      * @return Image
      */
     public function invert()
     {
         imagefilter($this->resource, IMG_FILTER_NEGATE);
-
-        return $this;
-    }
-
-    /**
-     * Apply blur filter on the current image
-     *
-     * @param  integer $amount
-     * @return Image
-     */
-    public function blur($amount = 1)
-    {
-        for ($i=0; $i < intval($amount); $i++) {
-            imagefilter($this->resource, IMG_FILTER_GAUSSIAN_BLUR);
-        }
-
-        return $this;
-    }
-
-    /**
-     * Set a maximum number of colors for the current image
-     *
-     * @param  integer $count
-     * @param  mixed   $matte
-     * @return Image
-     */
-    public function limitColors($count = null, $matte = null)
-    {
-        // create empty canvas
-        $resource = imagecreatetruecolor($this->width, $this->height);
-
-        // define matte
-        $matte = is_null($matte) ? imagecolorallocatealpha($resource, 0, 0, 0, 127) : $this->parseColor($matte);
-
-        // fill with matte and copy original image
-        imagefill($resource, 0, 0, $matte);
-
-        // set transparency
-        imagecolortransparent($resource, $matte);
-
-        // copy original image
-        imagecopy($resource, $this->resource, 0, 0, 0, 0, $this->width, $this->height);
-
-        if (is_numeric($count) && $count <= 256) {
-            // decrease colors
-            imagetruecolortopalette($resource, true, intval($count));
-        }
-
-        // set new resource
-        $this->resource = $resource;
 
         return $this;
     }
@@ -1216,72 +918,62 @@ class Image
     public function reset()
     {
         if (is_null($this->dirname) && is_null($this->basename)) {
-
-            $this->initEmpty($this->original['width'], $this->original['height'], $this->original['bgcolor']);
+            
+            $this->setPropertiesEmpty($this->original['width'], $this->original['height']);
 
         } else {
 
-            $this->initFromPath($this->dirname .'/'. $this->basename);
+            $this->setPropertiesFromPath($this->dirname .'/'. $this->basename);
         }
 
         return $this;
     }
 
     /**
-     * Encode image in different formats
+     * Returns image type stream
      *
-     * @param  string  $format
-     * @param  integer $quality
+     * @param string $type gif|png|jpg|jpeg
+     * @param integer quality
      * @return string
      */
-    public function encode($format = null, $quality = 90)
+    private function data($type = null, $quality = 90)
     {
-        $format = is_null($format) ? $this->type : $format;
-
         if ($quality < 0 || $quality > 100) {
-            throw new Exception\ImageQualityException('Quality of image must range from 0 to 100.');
+            throw new Exception('Quality of image must range from 0 to 100.');
         }
 
         ob_start();
 
-        switch (strtolower($format)) {
-            case 'data-url':
-                echo sprintf('data:%s;base64,%s', $this->mime, base64_encode($this->encode($this->type, $quality)));
-                break;
-
+        switch (strtolower($type)) {
             case 'gif':
-            case 1:
-                imagegif($this->resource);
-                break;
+                @imagegif($this->resource);
+            break;
 
             case 'png':
-            case 3:
                 $quality = round($quality / 11.11111111111); // transform quality to png setting
-                imagealphablending($this->resource, false);
-                imagesavealpha($this->resource, true);
-                imagepng($this->resource, null, $quality);
-                break;
+                @imagealphablending($this->resource, false);
+                @imagesavealpha($this->resource, true);
+                @imagepng($this->resource, null, $quality);
+            break;
 
             default:
             case 'jpg':
             case 'jpeg':
-            case 2:
-                imagejpeg($this->resource, null, $quality);
-                break;
+                @imagejpeg($this->resource, null, $quality);
+            break;
         }
 
         $data = ob_get_contents();
 
         ob_end_clean();
-
         return $data;
     }
 
     /**
      * Picks and formats color at position
      *
-     * @param  int    $x
-     * @param  int    $y
+     * @param  int $x
+     * @param  int $y
      * @param  string $format
      * @return mixed
      */
@@ -1299,13 +991,7 @@ class Image
 
             case 'rgba':
                 $color = imagecolorsforindex($this->resource, $color);
-                $color = sprintf(
-                    'rgba(%d, %d, %d, %.2f)',
-                    $color['red'],
-                    $color['green'],
-                    $color['blue'],
-                    $this->alpha2rgba($color['alpha'])
-                );
+                $color = sprintf('rgba(%d, %d, %d, %.2f)', $color['red'], $color['green'], $color['blue'], $this->alpha2rgba($color['alpha']));
                 break;
 
             case 'hex':
@@ -1313,20 +999,8 @@ class Image
                 $color = sprintf('#%02x%02x%02x', $color['red'], $color['green'], $color['blue']);
                 break;
 
-            case 'int':
-            case 'integer':
-                # in gd2 library color already is int...
-                break;
-
-            default:
             case 'array':
                 $color = imagecolorsforindex($this->resource, $color);
-                $color = array(
-                    'r' => $color['red'],
-                    'g' => $color['green'],
-                    'b' => $color['blue'],
-                    'a' => $this->alpha2rgba($color['alpha'])
-                );
                 break;
         }
 
@@ -1341,114 +1015,88 @@ class Image
      */
     public function parseColor($value)
     {
-        $a = 0; // alpha value
+        $alpha = 0;
 
         if (is_int($value)) {
 
             // color is alread allocated
             $allocatedColor = $value;
 
-        } elseif (is_array($value)) {
+        } elseif(is_array($value)) {
 
             // parse color array like: array(155, 155, 155)
-            if (count($value) == 4) {
+            list($r, $g, $b) = $value;
 
-                // color array with alpha value
-                list($r, $g, $b, $a) = $value;
-                $a = $this->alpha2gd($a);
-
-            } elseif (count($value) == 3) {
-
-                // color array without alpha value
-                list($r, $g, $b) = $value;
-
-            }
-
-        } elseif (is_string($value)) {
+        } elseif(is_string($value)) {
 
             // parse color string in hexidecimal format like #cccccc or cccccc or ccc
-            $hexPattern = '/^#?([a-f0-9]{1,2})([a-f0-9]{1,2})([a-f0-9]{1,2})$/i';
+            if (preg_match('/^#?([a-f0-9]{1,2})([a-f0-9]{1,2})([a-f0-9]{1,2})$/i', $value, $matches)) {
 
-            // parse color string in format rgb(140, 140, 140)
-            $rgbPattern = '/^rgb ?\(([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9]{1,3})\)$/i';
-
-            // parse color string in format rgba(255, 0, 0, 0.5)
-            $rgbaPattern = '/^rgba ?\(([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9.]{1,4})\)$/i';
-
-            if (preg_match($hexPattern, $value, $matches)) {
                 $r = strlen($matches[1]) == '1' ? '0x'.$matches[1].$matches[1] : '0x'.$matches[1];
                 $g = strlen($matches[2]) == '1' ? '0x'.$matches[2].$matches[2] : '0x'.$matches[2];
                 $b = strlen($matches[3]) == '1' ? '0x'.$matches[3].$matches[3] : '0x'.$matches[3];
-            } elseif (preg_match($rgbPattern, $value, $matches)) {
+
+            // parse color string in format rgb(140, 140, 140)
+            } elseif (preg_match('/^rgb ?\(([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9]{1,3})\)$/i', $value, $matches)) {
+
                 $r = ($matches[1] >= 0 && $matches[1] <= 255) ? intval($matches[1]) : 0;
                 $g = ($matches[2] >= 0 && $matches[2] <= 255) ? intval($matches[2]) : 0;
                 $b = ($matches[3] >= 0 && $matches[3] <= 255) ? intval($matches[3]) : 0;
-            } elseif (preg_match($rgbaPattern, $value, $matches)) {
+
+            // parse color string in format rgba(255, 0, 0, 0.5)
+            } elseif (preg_match('/^rgba ?\(([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9]{1,3}), ?([0-9.]{1,3})\)$/i', $value, $matches)) {
+
                 $r = ($matches[1] >= 0 && $matches[1] <= 255) ? intval($matches[1]) : 0;
                 $g = ($matches[2] >= 0 && $matches[2] <= 255) ? intval($matches[2]) : 0;
                 $b = ($matches[3] >= 0 && $matches[3] <= 255) ? intval($matches[3]) : 0;
-                $a = $this->alpha2gd($matches[4]);
+                $alpha = $this->alpha2gd($matches[4]);
+
             }
         }
 
         if (isset($allocatedColor)) {
+
             return $allocatedColor;
 
         } elseif (isset($r) && isset($g) && isset($b)) {
-            return imagecolorallocatealpha($this->resource, $r, $g, $b, $a);
+
+            return imagecolorallocatealpha($this->resource, $r, $g, $b, $alpha);
 
         } else {
 
-            throw new Exception\ImageColorException("Error parsing color [{$value}]");
+            throw new Exception("Error parsing color [{$value}]");
         }
     }
 
     /**
      * Save image in filesystem
      *
-     * @param  string  $path
-     * @param  integer $quality
+     * @param  string $path
      * @return Image
      */
     public function save($path = null, $quality = 90)
     {
         $path = is_null($path) ? ($this->dirname .'/'. $this->basename) : $path;
-        $saved = @file_put_contents($path, $this->encode(pathinfo($path, PATHINFO_EXTENSION), $quality));
-
-        if ($saved === false) {
-            throw new Exception\ImageNotWritableException;
+        
+        //for smart phone or etc. //returning to the side for the photos.
+        $exif_data = exif_read_data($this->dirname.'\\'.$this->basename, 'r');
+         
+        if(isset($exif_data['Orientation'])){
+        	 
+        	$ord = $exif_data['Orientation'] ?: 0;
+        	$deregges = array_values(array(0, 0, 0, 180, 0, 0, -90, 0, 90));
+        	$this->resource = imagerotate($this->resource, $deregges[$ord], 0);
+        
         }
+        
+        file_put_contents($path, $this->data($this->filesystem->extension($path), $quality));
 
         return $this;
     }
 
     /**
-     * Read Exif data from the current image
-     *
-     * Note: Windows PHP Users - in order to use this method you will need to
-     * enable the mbstring and exif extensions within the php.ini file.
-     *
-     * @param  string $key
-     * @return mixed
-     */
-    public function exif($key = null)
-    {
-        if (! function_exists('exif_read_data')) {
-            throw new Exception\ExifFunctionsNotAvailableException;
-        }
-
-        $data = exif_read_data($this->dirname .'/'. $this->basename, 'EXIF', false);
-
-        if (! is_null($key) && is_array($data)) {
-            return array_key_exists($key, $data) ? $data[$key] : null;
-        }
-
-        return $data;
-    }
-
-    /**
      * Convert rgba alpha (0-1) value to gd value (0-127)
-     *
+     * 
      * @param  float $input
      * @return int
      */
@@ -1462,14 +1110,12 @@ class Image
                 return $range_output[$key];
             }
         }
-
-        return 127;
     }
 
     /**
      * Convert gd alpha (0-127) value to rgba alpha value (0-1)
-     *
-     * @param  int   $input
+     * 
+     * @param  int $input
      * @return float
      */
     private function alpha2rgba($input)
@@ -1482,177 +1128,16 @@ class Image
                 return round($range_output[$key], 2);
             }
         }
-
-        return 1;
     }
 
     /**
-     * Checks if string contains printable characters
+     * Return filesystem object
      *
-     * @param  mixed   $input
-     * @return boolean
+     * @return Filesystem
      */
-    private function isBinary($input)
+    public function getFilesystem()
     {
-        if (is_resource($input)) {
-            return false;
-        }
-
-        return ( ! ctype_print($input));
-    }
-
-    /**
-     * Checks if the input object is image resource
-     *
-     * @param  mixed   $input
-     * @return boolean
-     */
-    private function isImageResource($input)
-    {
-        // --------------------------------------------------------------------
-        // There was a logical error in the program that wasn't considered.
-        // Namely, how should the program handle a valid resource handle
-        // that wasn't a valid image resource handle.
-        // Previously this method simply returned false if $input wasn't
-        // a valid image resource handle.  But in the constructor, the next
-        // conditional passed the file handle to the Image::isBinary method.
-        // The Image::isBinary method only checked if the input didn't contain
-        // any printable characters which for a handle is true. So the program
-        // incorrectly assumed the file handle as a binary string causing errors.
-        // By throwing an exception for resource handles that are not of type
-        // 'gd', the program stop the futher processing of data, and the
-        // developer is given a descriptive exception.
-        // --------------------------------------------------------------------
-
-        if (is_resource($input)) {
-            if (get_resource_type($input) != 'gd') {
-                throw new Exception\InvalidImageResourceException;
-            }
-
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Checks if the current image has (half) transparent pixels
-     *
-     * @return boolean
-     */
-    private function hasTransparency()
-    {
-        $step_x = min(max(floor($this->width/50), 1), 10);
-        $step_y = min(max(floor($this->height/50), 1), 10);
-
-        for ($x=0; $x<$this->width; $x=$x+$step_x) {
-            for ($y=0; $y<$this->height; $y=$y+$step_y) {
-                $color = $this->pickColor($x, $y);
-                if ($color['a'] < 1) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Set file info from image path in filesystem
-     *
-     * @param string $path
-     */
-    private function setFileInfoFromPath($path)
-    {
-        // set file info
-        $info = pathinfo($path);
-        $this->dirname = array_key_exists('dirname', $info) ? $info['dirname'] : null;
-        $this->basename = array_key_exists('basename', $info) ? $info['basename'] : null;
-        $this->extension = array_key_exists('extension', $info) ? $info['extension'] : null;
-        $this->filename = array_key_exists('filename', $info) ? $info['filename'] : null;
-    }
-
-    /**
-     * Set image info from image path in filesystem
-     *
-     * @param string $path
-     */
-    private function setImageInfoFromPath($path)
-    {
-        $info = @getimagesize($path);
-
-        if ($info === false) {
-            throw new Exception\InvalidImageTypeException(
-                "Wrong image type ({$this->type}) only use JPG, PNG or GIF images."
-            );
-        }
-
-        $this->width = $info[0];
-        $this->height = $info[1];
-        $this->type = $info[2];
-        $this->mime = $info['mime'];
-
-        // set resource
-        switch ($this->type) {
-            case IMG_PNG:
-            case 3:
-                $this->resource = imagecreatefrompng($path);
-                break;
-
-            case IMG_JPG:
-            case 2:
-                $this->resource = imagecreatefromjpeg($path);
-                break;
-
-            case IMG_GIF:
-            case 1:
-                $this->resource = imagecreatefromgif($path);
-                break;
-
-            default:
-                throw new Exception\InvalidImageTypeException(
-                    "Wrong image type ({$this->type}) only use JPG, PNG or GIF images."
-                );
-                break;
-        }
-    }
-
-    /**
-     * Set local image info from GD resource
-     *
-     * @param resource $resource
-     */
-    private function setImageInfoFromResource($resource)
-    {
-        $this->resource = $resource;
-        $this->width = imagesx($this->resource);
-        $this->height = imagesy($this->resource);
-        $this->original['width'] = $this->width;
-        $this->original['height'] = $this->height;
-    }
-
-    /**
-     * Set local image information from image string
-     *
-     * @param string $string
-     */
-    private function setImageInfoFromString($string)
-    {
-        // Without the '@' passing in an invalid binary-safe string will
-        // cause PHP to raise a warning. (Which is fine in production since
-        // you should have display errors off. right?)
-        // So supress the warning, and then check if there was an error.
-        $resource = @imagecreatefromstring($string);
-
-        if ($resource === false) {
-             throw new Exception\InvalidImageDataStringException;
-        }
-
-        $this->resource = $resource;
-        $this->width = imagesx($this->resource);
-        $this->height = imagesy($this->resource);
-        $this->original['width'] = $this->width;
-        $this->original['height'] = $this->height;
+        return $this->filesystem;
     }
 
     /**
@@ -1662,6 +1147,6 @@ class Image
      */
     public function __toString()
     {
-        return $this->encode();
+        return $this->data();
     }
 }
